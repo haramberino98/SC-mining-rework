@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Star Citizen Mining Mini-Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e14 url('background.png') center/cover no-repeat;
+    color: #7ec8e3;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    user-select: none;
+  }
+  #game {
+    position: relative;
+    width: 1000px;
+    height: 700px;
+    border: 1px solid #1e3a5f;
+    box-shadow: 0 0 40px rgba(0, 150, 255, 0.15);
+    overflow: hidden;
+    background: rgba(5, 8, 12, 0.55);
+  }
+  canvas {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #stats {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 40px;
+    font-size: 14px;
+    letter-spacing: 1px;
+    background: rgba(0,0,0,0.65);
+    padding: 12px 28px;
+    border-radius: 8px;
+    border: 1px solid #1e3a5f;
+    z-index: 10;
+  }
+  .stat { text-align: center; }
+  .stat span {
+    display: block;
+    font-size: 20px;
+    font-weight: 600;
+    color: #a8e6ff;
+    margin-top: 2px;
+  }
+  #message {
+    position: absolute;
+    top: 25px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 18px;
+    color: #7ec8e3;
+    text-shadow: 0 0 10px #00aaff;
+    z-index: 10;
+  }
+  #hint {
+    position: absolute;
+    top: 55px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 13px;
+    color: #5a8aaa;
+    z-index: 10;
+  }
+  #laserBtn {
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 10px 28px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    border: 2px solid #1e3a5f;
+    border-radius: 6px;
+    background: rgba(0,0,0,0.7);
+    color: #7ec8e3;
+    cursor: pointer;
+    z-index: 10;
+    transition: all 0.15s;
+  }
+  #laserBtn.on {
+    border-color: #00ff99;
+    color: #00ff99;
+    box-shadow: 0 0 15px rgba(0,255,150,0.4);
+  }
+  #laserBtn:hover {
+    background: rgba(20,40,60,0.9);
+  }
+</style>
+</head>
+<body>
+
+<div id="game">
+  <canvas id="c"></canvas>
+  <div id="message">MINING MODE</div>
+  <div id="hint">Scroll = Intensity · Left Click / Button = Toggle Laser</div>
+  <button id="laserBtn">LASER OFF</button>
+  <div id="stats">
+    <div class="stat">INTENSITY<br><span id="intVal">0%</span></div>
+    <div class="stat">CHARGE<br><span id="chgVal">0%</span></div>
+    <div class="stat">QUALITY<br><span id="quaVal">0</span></div>
+    <div class="stat">PROGRESS<br><span id="proVal">0%</span></div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = 1000;
+canvas.height = 700;
+
+const laserBtn = document.getElementById('laserBtn');
+
+// Rock image
+const rockImg = new Image();
+rockImg.src = 'rock.png';
+
+// ====== GAME STATE ======
+let intensity = 0;
+let charge = 0;
+let potentialQuality = Math.floor(500 + Math.random() * 501); // 500-1000
+let quality = potentialQuality;
+let progress = 0;
+let laserOn = false;
+let mining = true;
+let lastTime = performance.now();
+let gameTime = 0;
+
+// Flag: quality only starts decaying AFTER progress has begun
+let qualityDecayEnabled = false;
+
+// Rock parameters
+let optimal = 40 + Math.random() * 50;           // 40 → 90
+let gradientWidth = 10 + Math.random() * 20;     // 10 → 30
+
+// Variation sinusoid (unique per rock)
+let varAmplitude = 4 + Math.random() * 8;        // 4 → 12 %
+let varFrequency = 0.4 + Math.random() * 0.7;
+let varPhase = Math.random() * Math.PI * 2;
+
+// ====== INPUT ======
+window.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  intensity -= Math.sign(e.deltaY) * 2.5;
+  intensity = Math.max(0, Math.min(100, intensity));
+}, { passive: false });
+
+function toggleLaser() {
+  if (!mining) return;
+  laserOn = !laserOn;
+  laserBtn.textContent = laserOn ? 'LASER ON' : 'LASER OFF';
+  laserBtn.classList.toggle('on', laserOn);
+}
+canvas.addEventListener('click', toggleLaser);
+laserBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleLaser();
+});
+
+// ====== UPDATE ======
+function update(dt) {
+  if (!mining) return;
+
+  gameTime += dt;
+
+  // Sinusoidal variation
+  const variation = varAmplitude * Math.sin(gameTime * varFrequency + varPhase);
+  const applied = Math.max(0, Math.min(100, intensity + variation));
+
+  if (laserOn) {
+    charge += (applied - charge) * 2.2 * dt;
+  } else {
+    charge -= 6 * dt;
+    charge = Math.max(0, charge);
+  }
+
+  const distance = Math.abs(charge - optimal);
+
+  // Progress ONLY when laser ON and inside green zone
+  if (laserOn && distance < gradientWidth * 0.30) {
+    progress += 5 * dt;
+    progress = Math.min(100, progress);
+
+    // The very first time we gain progress → enable quality decay
+    if (!qualityDecayEnabled) {
+      qualityDecayEnabled = true;
+    }
+  }
+
+  // Quality loss ONLY after progress has started
+  if (qualityDecayEnabled) {
+    let lossPerSecond = 0;
+
+    if (distance < gradientWidth * 0.30) {
+      lossPerSecond = 0;          // Green
+    } else if (distance < gradientWidth * 0.55) {
+      lossPerSecond = 5;          // Yellow
+    } else if (distance < gradientWidth * 0.80) {
+      lossPerSecond = 10;         // Orange
+    } else {
+      lossPerSecond = 15;         // Red
+    }
+
+    quality -= lossPerSecond * dt;
+    quality = Math.max(0, quality);
+  }
+
+  if (progress >= 100 || quality <= 0) {
+    mining = false;
+    laserOn = false;
+    laserBtn.textContent = 'LASER OFF';
+    laserBtn.classList.remove('on');
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const cx = 500, cy = 300;
+
+  // Potential quality text
+  ctx.fillStyle = '#7ec8e3';
+  ctx.font = '16px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Potential Quality: ${potentialQuality}`, cx, cy - 130);
+
+  // Glow behind rock
+  const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 200);
+  glow.addColorStop(0, laserOn ? 'rgba(255, 160, 50, 1)' : 'rgba(200, 130, 50, 0.1)');
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 500, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Draw rock.png centered
+  if (rockImg.complete && rockImg.naturalWidth > 0) {
+    const maxSize = 220;
+    const scale = Math.min(maxSize / rockImg.width, maxSize / rockImg.height);
+    const w = rockImg.width * scale;
+    const h = rockImg.height * scale;
+    ctx.drawImage(rockImg, cx - w/2, cy - h/2, w, h);
+  }
+
+  // ===== LEFT VERTICAL BAR - INTENSITY =====
+  drawVerticalBar(140, 180, 36, 340, intensity / 100, laserOn ? '#00c8ff' : '#335566', '#001a22', 'LASER');
+
+  // ===== RIGHT VERTICAL BAR - CHARGE =====
+  drawGradientBar(824, 180, 36, 340, charge / 100, optimal / 100, gradientWidth / 100);
+
+  // Stats
+  document.getElementById('intVal').textContent = Math.round(intensity) + '%';
+  document.getElementById('chgVal').textContent = Math.round(charge) + '%';
+  document.getElementById('quaVal').textContent = Math.round(quality);
+  document.getElementById('proVal').textContent = Math.round(progress) + '%';
+
+  // End screen
+  if (!mining) {
+    ctx.fillStyle = 'rgba(0,0,0,0.78)';
+    ctx.fillRect(250, 230, 500, 160);
+    ctx.strokeStyle = quality > 200 ? '#00ff99' : '#ff4444';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(250, 230, 500, 160);
+    ctx.fillStyle = '#a8e6ff';
+    ctx.font = '24px Segoe UI';
+    ctx.textAlign = 'center';
+    ctx.fillText(quality > 200 ? 'MINING COMPLETE' : 'ROCK DESTROYED', 500, 285);
+    ctx.font = '17px Segoe UI';
+    ctx.fillText(`Final Quality: ${Math.round(quality)} / ${potentialQuality}`, 500, 325);
+    ctx.fillText('Reload the page for a new rock', 500, 360);
+  }
+}
+
+function drawVerticalBar(x, y, w, h, value, color, bg, label) {
+  ctx.fillStyle = bg;
+  ctx.fillRect(x, y, w, h);
+
+  const fillH = h * value;
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y + h - fillH, w, fillH);
+
+  ctx.strokeStyle = '#1e3a5f';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+
+  ctx.fillStyle = '#5a8aaa';
+  ctx.font = '12px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText(label, x + w / 2, y + h + 22);
+}
+
+function drawGradientBar(x, y, w, h, value, opt, width) {
+  const steps = 80;
+  const stepH = h / steps;
+
+  for (let i = 0; i < steps; i++) {
+    const t = i / steps;
+    const dist = Math.abs(t - opt);
+    let col;
+
+    if (dist < width * 0.30) {
+      const g = 180 + (1 - dist / (width * 0.30)) * 60;
+      col = `rgb(0, ${g}, 110)`;
+    } else if (dist < width * 0.55) {
+      const ratio = (dist - width * 0.30) / (width * 0.25);
+      col = `rgb(${80 + ratio * 140}, ${200 - ratio * 40}, 40)`;
+    } else if (dist < width * 0.80) {
+      const ratio = (dist - width * 0.55) / (width * 0.25);
+      col = `rgb(${180 + ratio * 50}, ${140 - ratio * 70}, 30)`;
+    } else {
+      const ratio = Math.min(1, (dist - width * 0.80) / (width * 0.4));
+      col = `rgb(${220 + ratio * 35}, ${50 - ratio * 30}, 25)`;
+    }
+
+    ctx.fillStyle = col;
+    ctx.fillRect(x, y + h - (i + 1) * stepH, w, stepH + 1);
+  }
+
+  ctx.strokeStyle = '#1e3a5f';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+
+  // Charge marker
+  const markerY = y + h - (value * h);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(x - 6, markerY);
+  ctx.lineTo(x + w + 6, markerY);
+  ctx.lineTo(x + w + 2, markerY - 7);
+  ctx.lineTo(x + w + 2, markerY + 7);
+  ctx.closePath();
+  ctx.fill();
+
+  // Optimal marker
+  const optY = y + h - (opt * h);
+  ctx.strokeStyle = 'rgba(0,255,160,0.7)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 8, optY);
+  ctx.lineTo(x + w + 8, optY);
+  ctx.stroke();
+
+  ctx.fillStyle = '#5a8aaa';
+  ctx.font = '12px Segoe UI';
+  ctx.textAlign = 'center';
+  ctx.fillText('CHARGE', x + w / 2, y + h + 22);
+}
+
+function loop(now) {
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
